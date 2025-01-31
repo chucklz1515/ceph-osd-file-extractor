@@ -21,8 +21,6 @@ relativeNextFileDefinitionAddress = 0x09 - offsetRelativeAddressCorrection
 
 # ####################################################################################################
 # walk through the filesystem
-
-# these are test paths
 testFileAttrName = '/mnt/test/5.f_head/all/#5:f1988779:::10002413871.00000000:head#/attr/_parent'
 testFileDataName = '/mnt/test/5.f_head/all/#5:f1988779:::10002413871.00000000:head#/data'
 
@@ -134,10 +132,18 @@ for fullPaths, dirNames, fileNames in os.walk(fuseRoot):
                     # ####################################################################################################
                     # FILE RECOVERY
                     
-                    # make that dir
-                    if not os.path.exists(newDir):
-                        os.makedirs(newDir)
-                        
-                    # copy the data file to the fullpath file
-                    if not os.path.exists(newFile):
-                        shutil.copyfile(pgDataFile, newFile)
+                    #BUG: a data file can be zero bytes. however i found that in the OSD, a zero byte data file can also be an empty folder
+                    #     in this case, ill skip them. by inverting the condition, i can process them if i find that im missing files
+                    
+                    # skip files data files that are 0 bytes
+                    if not os.stat(pgDataFile).st_size == 0:
+                        # make that dir
+                        if not os.path.exists(newDir):
+                            print('new dir:  ' + newDir)
+                            os.makedirs(newDir)
+                            
+                        # copy the data file to the fullpath file
+                        if not os.path.exists(newFile):
+                            print('old file: ' + pgDataFile)
+                            print('new file: ' + newFile)
+                            shutil.copyfile(pgDataFile, newFile)
