@@ -148,7 +148,7 @@ Yay! I see file markers! That means I should be able to extract them right?
 
 ...there's no files here are there?
 
-## I DO!
+### I DO!
 I knew I would fall into a recurring pattern of extracting/decompressing possible scenarios when that may not even be whats happening. I also couldn't garuntee that I would have filenames or paths. I really needed all 3:
  * data
  * filename
@@ -242,6 +242,34 @@ After mapping it out, I then proceeded to write a python script that would:
  * Find the `_parent` file in the `attr` directory
  * Scrape the file's full path information
  * Copy the data file to the new cluster with the path information
+
+# Limitations/Known Issues
+## Zero Byte Data Files
+Once I ran the script to start scraping the data, I found that there were several cases where the script will crash due to an error similar to:
+```
+old file: /mnt/test/5.1b_head/all/#5:d8b4db0d:::1000009b975.00000000:head#/data
+new file: /mnt/ceph-fs-storage/data/some_dir/some_file
+Traceback (most recent call last):
+  File "/root/scrape.py", line 158, in <module>
+    shutil.copyfile(pgDataFile, newFile)
+  File "/usr/lib/python3.11/shutil.py", line 258, in copyfile
+    with open(dst, 'wb') as fdst:
+         ^^^^^^^^^^^^^^^
+NotADirectoryError: [Errno 20] Not a directory: '/mnt/ceph-fs-storage/data/some_dir/some_file'
+```
+
+This occurs when:
+ * Previously, the script found a `_parent` and `data` file for `/mnt/ceph-fs-storage/data/some_dir`.
+   * The `data` file had a size of 0 bytes.
+   * The script created a __file__ at the path `'/mnt/ceph-fs-storage/data/some_dir`.
+ * Now, the script is trying to create a file at `/mnt/ceph-fs-storage/data/some_dir/some_file` only to find that `some_dir` is a file and not a directory.
+
+### Mitigations
+For now, I just skip processing any `data` file that has a size of 0 bytes. I thought of 2 reasons why there are `data` files with size of 0 bytes:
+ * It is not a file, but a (possibly empty?) folder
+ * The file is empty
+
+I'll handle them later as I'm focused on getting back online as fast as possible.
 
 # Conclusion
 I was able to successfully recover my files. Granted, they have no metadata (correct permissions, datetime, etc), but I haven't lost anything.
