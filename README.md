@@ -234,7 +234,7 @@ Using a hexeditor, I took a few hours to map out the binary file and how I can s
      * __NOTE: I'm using an example of 4 byte file name length__
    * address `0x19 - 0x19`: this byte is unknown. it has a value, but i didn't see any point in collecting it
    * address `0x1A - 0x23`: honestly, i didn't care for the information at this point. i had what i needed which was the file/folder names. Importantly, from this byte to the next file/folder definition block is 8 bytes
- * After the last folder definition, there is a byte which indicates if this item is a folder (`0x05`) or file (`0x05`)
+ * After the last folder definition, there is a byte which indicates if this item is a folder (`0x04`) or file (`0x05`)
  * The "file/folder definition" blocks define the file's full path, but in reverse order (ie. file/parent/parent_parent/etc.../) so it needs to be reversed
 
 After mapping it out, I then proceeded to write a python script that would:
@@ -245,7 +245,7 @@ After mapping it out, I then proceeded to write a python script that would:
  * Copy the data file to the new cluster with the path information
 
 # The OSD Strikes Back
-This wouldn't be a thrilling story without some struggle right?
+This wouldn't be a thrilling story without some struggle, right?
 
 ## Zero Byte Data Files
 Once I ran the script to start scraping the data, I found that there were several cases where the script will crash due to an error similar to:
@@ -271,7 +271,7 @@ This occurs when:
 There was a byte in the `_parent` file tells me the file type (ie. `0x04` for folder, `0x05` for file). I parsed that out and fixed the error.
 
 ## Large Files > 4MB
-At this point, I thought I had recovered all my files. However, upon starting services (namely DBs), I found that there was data corruption. I investigated and found that files that were suppose to be be larger than 4MB, we re truncated to 4MB. To be honest, I should have seen this coming as ceph operates by striping data.
+At this point, I thought I had recovered all my files. However, upon starting services (namely DBs), I found that there was data corruption. I investigated and found that files that were suppose to be be larger than 4MB, were truncated to 4MB. To be honest, I should have seen this coming as ceph operates by striping data.
 
 ### Investigation
 I had to deep dive some more into the binary files to find out more about the structure of Bluestore file system. I will work with the example path for this part:
@@ -282,14 +282,14 @@ I had to deep dive some more into the binary files to find out more about the st
 I found out the following:
  * `5.f_head` - I still think this is the placement group
  * `all` - I think this means "all" files in this placement group
- * `#5:f1988779:::10002413871.00000000:head#` - This is broken down into the below sections. Note that I think the `#` here actually start/end blocks for the name. Also, I think the `:` is a separator for each component.
+ * `#5:f1988779:::10002413871.00000000:head#` - This is broken down into the below sections. I think the `#` here is actually start/end blocks for the name. Also, I think the `:` is a separator for each component.
    * `5` -  The `5` matches the placement group major number
-   * `f1988779` - This is a bitwise hash for the data file. I wont bother calculating matching hashes as that would take __forever__
+   * `f1988779` - This is a bitwise hash for the data file (i think?). I wont bother calculating matching hashes as that would take __forever__
    * `10002413871` - This is a unique file indicator
    * `00000000` - This is the (hexidecimal) sequential chunk number for the unique file
      * Only the `00000000` folder has the `_parent` file
 
-The way that this works is that file larger than 4MB, it is ripped into 4MB chunks. The chunks are then spread across the OSD. Here is an example of what that could look like:
+The way that this works is that files larger than 4MB, it is ripped into 4MB chunks. The chunks are then spread across the OSD. Here is an example of what that could look like:
 ```
 /mnt/test/5.7f_head/all/#5:fea38466:::100028f0fe1.00000000:head#
 /mnt/test/5.10_head/all/#5:09bae575:::100028f0fe1.00000001:head#
@@ -308,10 +308,11 @@ The way that this works is that file larger than 4MB, it is ripped into 4MB chun
 
 ### Resolution
 I had do a lot of extra operations to the script. Basically, it boils down to:
- * Regex select the unique file indicator and sequential chunk number from the path
+ * Regex search for the unique file indicator and sequential chunk number from the path
  * Perform folder search against the unique indicator for all chunk folders
- * Sort the chunks (can't simply sort by folder name as the bitwise hash rions it)
- * Append the chunk file's binary data to the new file
+   * Note: This takes __forever__, but I didn't write the python script with optimization in mind :)
+ * Sort the chunks (I can't simply sort by folder name as the bitwise hash ruins sorting)
+ * Append the chunk file's binary data to the new file which was already created at this point
 
 # Conclusion
 I was able to successfully recover my files. Granted, they have no metadata (correct permissions, datetime, etc), but I haven't lost anything.
