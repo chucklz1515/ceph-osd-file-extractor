@@ -202,7 +202,7 @@ Folder structure looks like this:
        |
        +- all
           |
-          +- #3:20000000::::head#
+          +- #5:f1988779:::10002413871.00000000:head#
              |
              +- data (this is a binary file of the file's data)
              |
@@ -234,6 +234,7 @@ Using a hexeditor, I took a few hours to map out the binary file and how I can s
      * __NOTE: I'm using an example of 4 byte file name length__
    * address `0x19 - 0x19`: this byte is unknown. it has a value, but i didn't see any point in collecting it
    * address `0x1A - 0x23`: honestly, i didn't care for the information at this point. i had what i needed which was the file/folder names. Importantly, from this byte to the next file/folder definition block is 8 bytes
+ * After the last folder definition, there is a byte which indicates if this item is a folder (`0x05`) or file (`0x05`)
  * The "file/folder definition" blocks define the file's full path, but in reverse order (ie. file/parent/parent_parent/etc.../) so it needs to be reversed
 
 After mapping it out, I then proceeded to write a python script that would:
@@ -243,7 +244,9 @@ After mapping it out, I then proceeded to write a python script that would:
  * Scrape the file's full path information
  * Copy the data file to the new cluster with the path information
 
-# Limitations/Known Issues
+# The OSD Strikes Back
+This wouldn't be a thrilling story without some struggle right?
+
 ## Zero Byte Data Files
 Once I ran the script to start scraping the data, I found that there were several cases where the script will crash due to an error similar to:
 ```
@@ -264,12 +267,51 @@ This occurs when:
    * The script created a __file__ at the path `'/mnt/ceph-fs-storage/data/some_dir`.
  * Now, the script is trying to create a file at `/mnt/ceph-fs-storage/data/some_dir/some_file` only to find that `some_dir` is a file and not a directory.
 
-### Mitigations
-For now, I just skip processing any `data` file that has a size of 0 bytes. I thought of 2 reasons why there are `data` files with size of 0 bytes:
- * It is not a file, but a (possibly empty?) folder
- * The file is empty
+### Resolution
+There was a byte in the `_parent` file tells me the file type (ie. `0x04` for folder, `0x05` for file). I parsed that out and fixed the error.
 
-I'll handle them later as I'm focused on getting back online as fast as possible.
+## Large Files > 4MB
+At this point, I thought I had recovered all my files. However, upon starting services (namely DBs), I found that there was data corruption. I investigated and found that files that were suppose to be be larger than 4MB, we re truncated to 4MB. To be honest, I should have seen this coming as ceph operates by striping data.
+
+### Investigation
+I had to deep dive some more into the binary files to find out more about the structure of Bluestore file system. I will work with the example path for this part:
+```
+/mnt/test/5.7f_head/all/#5:fea38466:::100028f0fe1.00000000:head#
+```
+
+I found out the following:
+ * `5.f_head` - I still think this is the placement group
+ * `all` - I think this means "all" files in this placement group
+ * `#5:f1988779:::10002413871.00000000:head#` - This is broken down into the below sections. Note that I think the `#` here actually start/end blocks for the name. Also, I think the `:` is a separator for each component.
+   * `5` -  The `5` matches the placement group major number
+   * `f1988779` - This is a bitwise hash for the data file. I wont bother calculating matching hashes as that would take __forever__
+   * `10002413871` - This is a unique file indicator
+   * `00000000` - This is the (hexidecimal) sequential chunk number for the unique file
+     * Only the `00000000` folder has the `_parent` file
+
+The way that this works is that file larger than 4MB, it is ripped into 4MB chunks. The chunks are then spread across the OSD. Here is an example of what that could look like:
+```
+/mnt/test/5.7f_head/all/#5:fea38466:::100028f0fe1.00000000:head#
+/mnt/test/5.10_head/all/#5:09bae575:::100028f0fe1.00000001:head#
+/mnt/test/5.5a_head/all/#5:5a091d7f:::100028f0fe1.00000002:head#
+/mnt/test/5.6f_head/all/#5:f63387fb:::100028f0fe1.00000003:head#
+/mnt/test/5.7c_head/all/#5:3f938613:::100028f0fe1.00000004:head#
+/mnt/test/5.15_head/all/#5:a82d637c:::100028f0fe1.00000005:head#
+/mnt/test/5.1e_head/all/#5:79f68ed6:::100028f0fe1.00000006:head#
+/mnt/test/5.10_head/all/#5:08ac83db:::100028f0fe1.00000007:head#
+/mnt/test/5.42_head/all/#5:4208d4bc:::100028f0fe1.00000008:head#
+/mnt/test/5.65_head/all/#5:a7d973e6:::100028f0fe1.00000009:head#
+/mnt/test/5.1a_head/all/#5:591fea12:::100028f0fe1.0000000a:head#
+/mnt/test/5.27_head/all/#5:e552bdc4:::100028f0fe1.0000000b:head#
+/mnt/test/5.64_head/all/#5:269be025:::100028f0fe1.0000000c:head#
+```
+
+### Resolution
+I had do a lot of extra operations to the script. Basically, it boils down to:
+ * Regex select the unique file indicator and sequential chunk number from the path
+ * Perform folder search against the unique indicator for all chunk folders
+ * Sort the chunks (can't simply sort by folder name as the bitwise hash rions it)
+ * Append the chunk file's binary data to the new file
 
 # Conclusion
 I was able to successfully recover my files. Granted, they have no metadata (correct permissions, datetime, etc), but I haven't lost anything.
